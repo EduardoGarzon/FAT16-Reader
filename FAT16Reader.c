@@ -25,17 +25,15 @@ typedef struct fat_BS
     unsigned short head_side_count;       // offset 26 - 2 bytes
     unsigned int hidden_sector_count;     // offset 28 - 4 bytes
     unsigned int total_sectors_32;        // offset 32 - 4 bytes
-
     // this will be cast to it's specific type once the driver actually knows what type of FAT this is.
     unsigned char extended_section[54];
-
 } __attribute__((__packed__)) fat_BS_t;
 
 // Standard 8.3 Format Direcotory.
 typedef struct Standard_Dir_Format
 {
-    unsigned char file_name[8];             // offset 0 - 11 bytes (8 for name)
-    unsigned char extension[3];             // offset 0 - 11 bytes (3 for extension)
+    unsigned char file_name[8];             // offset 0  - 11 bytes (8 for name)
+    unsigned char extension[3];             // offset 0  - 11 bytes (3 for extension)
     unsigned char file_attribute;           // offset 11 - 1 byte
     unsigned char reserved_windows_NT;      // offset 12 - 1 byte
     unsigned char creation_time;            // offset 13 - 1 byte
@@ -47,7 +45,6 @@ typedef struct Standard_Dir_Format
     unsigned short last_modificaition_date; // offset 24 - 2 bytes
     unsigned short low_bits_first_cluster;  // offset 26 - 2 bytes
     unsigned int file_size;                 // offset 28 - 4 bytes
-
 } __attribute__((__packed__)) standardDir;
 
 // Posicoes dos diretorios do sistema de arquivos.
@@ -57,7 +54,6 @@ typedef struct Directory_Positions
     unsigned int fats[2];        // FAT1 - FAT2
     unsigned int root_directory; // Root Directory
     unsigned int data_area;      // Data
-
 } __attribute__((__packed__)) dirPosition;
 
 void printBootRecord(FILE *fp, fat_BS_t *boot_record);
@@ -128,7 +124,7 @@ void printBootRecord(FILE *fp, fat_BS_t *boot_record)
 
     printf("Number of sectors 16---------------> %hu\n", boot_record->total_sectors_16);
     printf("Media descryptor type--------------> %x\n", boot_record->media_type);
-    printf("Number of sectores per FAT table---> %hd\n", boot_record->table_size_16);
+    printf("Number of sectors per FAT table---> %hd\n", boot_record->table_size_16);
     printf("Number of sectors per track--------> %hd\n", boot_record->sectors_per_track);
     printf("Number of heads or sides-----------> %hd\n", boot_record->head_side_count);
     printf("Number of hidden sectors-----------> %d\n", boot_record->hidden_sector_count);
@@ -202,17 +198,32 @@ void printArchive(FILE *fp, fat_BS_t *boot_record, dirPosition *positions, stand
     // Inicio da Area de Dados do primeiro arquivo.
     positions->data_area = ((boot_record->reserved_sector_count + (boot_record->table_count * boot_record->table_size_16) + root_directory_sectors) + ((int)rootDir.low_bits_first_cluster - 2) * boot_record->sectors_per_cluster) * boot_record->bytes_per_sector;
 
-    printf("Entry: %d | File Name: %s.%s | Attribute: 0x%x | Size: %d | First Cluster: %x\n\n", index, rootDir.file_name, rootDir.extension, rootDir.file_attribute, rootDir.file_size, rootDir.low_bits_first_cluster);
+    printf("Entry: %d | File Name: %s.%s | Attribute: 0x%x | Size: %d | First Cluster: %d\n\n", index, rootDir.file_name, rootDir.extension, rootDir.file_attribute, rootDir.file_size, rootDir.low_bits_first_cluster);
 
     // Posicionando o ponteiro no primeiro cluster do arquivo na FAT1.
     int relative_cluster_position = (positions->fats[0] + ((int)rootDir.low_bits_first_cluster) * 2);
     fseek(fp, relative_cluster_position, SEEK_SET);
 
-    // Armazena o dado da entrada do cluster da FAT1.
-    unsigned short next_cluster;
+    // Armazenando os Clusters
+    unsigned short *cluster_vector = NULL, dado;
+    cluster_vector = (unsigned short *)malloc(sizeof(unsigned short));
+    cluster_vector[0] = rootDir.low_bits_first_cluster;
+    int tamanho = 1;
 
-    // Primeira posicao do cluster absoluto que contem o inicio dos dados do arquivo.
-    int absolute_cluster_position = positions->data_area;
+    printf("Clusters: %x ", cluster_vector[0]);
+    for (int i = 1; cluster_vector[i - 1] != 0xffff; i++)
+    {
+        fread(&dado, sizeof(unsigned short), 1, fp);
+
+        if (cluster_vector[i] == 0x0000)
+            continue;
+        else
+            tamanho++;
+            cluster_vector = (unsigned short *)realloc(cluster_vector, tamanho * sizeof(unsigned short));
+            cluster_vector[i] = dado;
+
+        printf("%x ", cluster_vector[i]);
+    }
 
     // Numero de setores que o arquivo ocupa.
     int total_sector_archive = rootDir.file_size / (boot_record->reserved_sector_count * boot_record->bytes_per_sector);
@@ -220,69 +231,37 @@ void printArchive(FILE *fp, fat_BS_t *boot_record, dirPosition *positions, stand
     // Bytes de setor incompleto.
     int total_incomplete_sector_bytes = rootDir.file_size - (total_sector_archive * (boot_record->reserved_sector_count * boot_record->bytes_per_sector));
 
-    printf("Setores Inteiros: %d | Restante: %d bytes\n", (int)total_sector_archive, total_incomplete_sector_bytes);
-    printf("Data Area Starts: %x", positions->data_area);
+    printf("\n");
+    printf("Setores Inteiros: %d | Restante: %d bytes\n", total_sector_archive, total_incomplete_sector_bytes);
+    printf("Data Area Starts: %x\n\n", positions->data_area);
 
-    // Arquivo ocupa setores completos?
-    if (total_sector_archive > 0)
+    // Exibe Clusters inteiros
+    int i = 0;
+    for (i; i < total_sector_archive; i++)
     {
-        int cluster_counter = 0;
-        int previous_cluster;
-        while (cluster_counter < (int)total_sector_archive)
+        // Calcula a posicao dos dados na area de dados.
+        int absolute_position = ((((int)cluster_vector[i] - 2) * boot_record->reserved_sector_count) + ((1 * boot_record->reserved_sector_count) + (2 * boot_record->table_size_16) + root_directory_sectors)) * boot_record->bytes_per_sector;
+
+        //printf("\n\nRelative Cluster: %d -> Data Area Position: %x\n\n", cluster_vector[i], absolute_position);
+
+        fseek(fp, absolute_position, SEEK_SET);
+
+        unsigned char dado;
+        for (int i = 0; i < (boot_record->bytes_per_sector * boot_record->reserved_sector_count); i++)
         {
-            // Realiza a leitura para o proximo cluster.
-            previous_cluster = next_cluster;
-            fread(&next_cluster, sizeof(unsigned short), 1, fp);
-
-            printf("\n\nRelative: %d | Proximo Cluster: %x\n", relative_cluster_position, next_cluster);
-            printf("Absolute Position: %x\n\n", absolute_cluster_position);
-
-            // Posiciona o ponteiro na posicao inicial do cluster absoluto atual.
-            fseek(fp, absolute_cluster_position, SEEK_SET);
-            unsigned char dado;
-            for (int i = 0; i < (boot_record->bytes_per_sector * boot_record->reserved_sector_count); i++)
-            {
-                fread(&dado, sizeof(unsigned char), 1, fp);
-                printf("%c", dado);
-            }
-
-            if (next_cluster == 0xffff)
-            {
-                printf("\n\nRelative: %d | Proximo Cluster: %x\n\n", relative_cluster_position, next_cluster);
-                break;
-            }
-
-            // Atualiza a posicao do cluster absoluto.
-            if ((next_cluster - previous_cluster) > 1)
-            {
-                // Clusters nao sequenciais.
-                absolute_cluster_position = ((positions->data_area / boot_record->bytes_per_sector) + (next_cluster - 2) - 2) * boot_record->bytes_per_sector;
-            }
-            else
-            {
-                // Clusters Sequenciais.
-                absolute_cluster_position += boot_record->bytes_per_sector * boot_record->reserved_sector_count;
-            }
-
-            // Avanca para o proximo cluster relativo.
-            relative_cluster_position = (positions->fats[0] + (next_cluster * 2));
-            fseek(fp, relative_cluster_position, SEEK_SET);
-
-            cluster_counter++;
+            fread(&dado, sizeof(unsigned char), 1, fp);
+            printf("%c", dado);
         }
     }
 
-    // Bytes remanescentes em setores nao totalmente utilizados?
+    // Exibe Cluster incompleto.
     if (total_incomplete_sector_bytes != 0)
     {
-        // Realiza a leitura para o proximo cluster.
-        fread(&next_cluster, sizeof(unsigned short), 1, fp);
+        int absolute_position = ((((int)cluster_vector[i] - 2) * boot_record->reserved_sector_count) + ((1 * boot_record->reserved_sector_count) + (2 * boot_record->table_size_16) + root_directory_sectors)) * boot_record->bytes_per_sector;
 
-        printf("\n\nRelative: %d | Proximo Cluster: %x\n", relative_cluster_position, next_cluster);
-        printf("Absolute Position: %x\n\n", absolute_cluster_position);
+        //printf("\n\nRelative Cluster: %d -> Data Area Position: %x\n\n", cluster_vector[i], absolute_position);
 
-        // Posiciona o ponteiro na posicao inicial do cluster absoluto atual.
-        fseek(fp, absolute_cluster_position, SEEK_SET);
+        fseek(fp, absolute_position, SEEK_SET);
 
         unsigned char dado;
         for (int i = 0; i < total_incomplete_sector_bytes; i++)
